@@ -182,6 +182,42 @@
             </div>
             <div id="wsResult"></div>
         </div>
+        
+        <!-- Live Camera Streaming -->
+        <div class="section">
+            <h2>Live Camera Streaming</h2>
+            <div>
+                <button id="cameraConnectBtn" onclick="connectCameraWebSocket()">Connect WebSocket</button>
+                <button id="cameraDisconnectBtn" onclick="disconnectCameraWebSocket()" disabled>Disconnect</button>
+            </div>
+            <div id="cameraWsStatus" class="status"></div>
+            
+            <div style="margin-top: 15px;">
+                <div class="flex-row" style="justify-content: space-between; margin-bottom: 10px;">
+                    <button id="startCameraBtn" onclick="startCamera()" disabled>Start Camera</button>
+                    <button id="stopCameraBtn" onclick="stopCamera()" disabled>Stop Camera</button>
+                    <div>
+                        <label for="frameRate">Frame Rate:</label>
+                        <select id="frameRate">
+                            <option value="2000">0.5 fps</option>
+                            <option value="1000">1 fps</option>
+                            <option value="500" selected>2 fps</option>
+                            <option value="200">5 fps</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div style="position: relative; margin-bottom: 10px;">
+                    <video id="cameraPreview" style="width: 100%; border-radius: 5px; background-color: #000; display: none;" autoplay muted></video>
+                    <canvas id="captureCanvas" style="display: none;"></canvas>
+                    <div id="streamStatus" style="position: absolute; top: 10px; right: 10px; padding: 5px 10px; background-color: rgba(0,0,0,0.5); color: white; border-radius: 3px; display: none;">
+                        Not streaming
+                    </div>
+                </div>
+                
+                <div id="cameraResult"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -189,7 +225,16 @@
         let serverUrl = 'localhost:8000';
         let videoWs = null;
         let textWs = null;
-
+        let cameraWs = null;
+        
+        // Camera streaming variables
+        let videoStream = null;
+        let streamInterval = null;
+        let isStreaming = false;
+        let videoElement = null;
+        let canvasElement = null;
+        let canvasContext = null;
+        
         // Update server URL
         function updateServerUrl() {
             const newUrl = document.getElementById('serverUrl').value.trim();
@@ -205,6 +250,11 @@
                 }
                 if (textWs && textWs.readyState === WebSocket.OPEN) {
                     disconnectTextWebSocket();
+                }
+                
+                // Also disconnect camera WebSocket if connected
+                if (cameraWs && cameraWs.readyState === WebSocket.OPEN) {
+                    disconnectCameraWebSocket();
                 }
             }
         }
@@ -587,6 +637,219 @@
             };
             
             reader.readAsArrayBuffer(file);
+        }
+
+        // Camera streaming functions
+        function connectCameraWebSocket() {
+            const cameraWsStatus = document.getElementById('cameraWsStatus');
+            const connectBtn = document.getElementById('cameraConnectBtn');
+            const disconnectBtn = document.getElementById('cameraDisconnectBtn');
+            const startCameraBtn = document.getElementById('startCameraBtn');
+
+            cameraWsStatus.textContent = 'Connecting to WebSocket...';
+            cameraWsStatus.className = 'status pending';
+
+            try {
+                cameraWs = new WebSocket(`ws://${serverUrl}/ws/video`);
+
+                cameraWs.onopen = function() {
+                    cameraWsStatus.textContent = 'WebSocket connected!';
+                    cameraWsStatus.className = 'status success';
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    startCameraBtn.disabled = false;
+                };
+
+                cameraWs.onmessage = function(event) {
+                    const cameraResult = document.getElementById('cameraResult');
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        // Update results with minimal DOM operations to avoid slowing down the stream
+                        if (!cameraResult.lastData || 
+                            data.planting_detected !== cameraResult.lastData.planting_detected ||
+                            data.watering_detected !== cameraResult.lastData.watering_detected || 
+                            data.waste_separation_detected !== cameraResult.lastData.waste_separation_detected) {
+                            
+                            let resultHtml = '';
+                            
+                            if (data.planting_detected || data.watering_detected || data.waste_separation_detected) {
+                                if (data.planting_detected) {
+                                    resultHtml += '<div class="status success">Planting activity detected! ✅</div>';
+                                }
+                                if (data.watering_detected) {
+                                    resultHtml += '<div class="status success">Watering activity detected! ✅</div>';
+                                }
+                                if (data.waste_separation_detected) {
+                                    resultHtml += '<div class="status success">Waste separation activity detected! ✅</div>';
+                                }
+                            } else {
+                                resultHtml += '<div class="status error">No eco-activities detected</div>';
+                            }
+                            
+                            // Show detected objects
+                            if (data.detected_objects && data.detected_objects.length > 0) {
+                                resultHtml += '<p>Detected: ';
+                                resultHtml += data.detected_objects.map(obj => `${obj.class} (${Math.round(obj.confidence * 100)}%)`).join(', ');
+                                resultHtml += '</p>';
+                            }
+                            
+                            cameraResult.innerHTML = resultHtml;
+                            cameraResult.lastData = data;
+                        }
+                    } catch (e) {
+                        cameraResult.innerHTML = `<div class="status error">Error parsing data: ${e.message}</div>`;
+                    }
+                };
+
+                cameraWs.onclose = function() {
+                    stopCamera();
+                    cameraWsStatus.textContent = 'WebSocket disconnected';
+                    cameraWsStatus.className = 'status pending';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    startCameraBtn.disabled = true;
+                    document.getElementById('stopCameraBtn').disabled = true;
+                };
+
+                cameraWs.onerror = function(error) {
+                    cameraWsStatus.textContent = `WebSocket error: ${error.message || 'Unknown error'}`;
+                    cameraWsStatus.className = 'status error';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    startCameraBtn.disabled = true;
+                };
+            } catch (error) {
+                cameraWsStatus.textContent = `Error creating WebSocket: ${error.message}`;
+                cameraWsStatus.className = 'status error';
+            }
+        }
+
+        function disconnectCameraWebSocket() {
+            stopCamera();
+            
+            if (cameraWs) {
+                cameraWs.close();
+                cameraWs = null;
+            }
+            
+            const cameraWsStatus = document.getElementById('cameraWsStatus');
+            cameraWsStatus.textContent = 'Disconnected';
+            cameraWsStatus.className = 'status pending';
+            
+            document.getElementById('cameraConnectBtn').disabled = false;
+            document.getElementById('cameraDisconnectBtn').disabled = true;
+            document.getElementById('startCameraBtn').disabled = true;
+            document.getElementById('stopCameraBtn').disabled = true;
+        }
+        
+        async function startCamera() {
+            if (!cameraWs || cameraWs.readyState !== WebSocket.OPEN) {
+                alert('WebSocket not connected');
+                return;
+            }
+            
+            // Initialize video and canvas elements
+            videoElement = document.getElementById('cameraPreview');
+            canvasElement = document.getElementById('captureCanvas');
+            canvasContext = canvasElement.getContext('2d');
+            
+            try {
+                // Get camera stream
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' } 
+                });
+                
+                // Connect stream to video element
+                videoElement.srcObject = videoStream;
+                videoElement.style.display = 'block';
+                
+                // Wait for video to be ready
+                await new Promise(resolve => {
+                    videoElement.onloadedmetadata = () => {
+                        // Set canvas size to match video
+                        canvasElement.width = videoElement.videoWidth;
+                        canvasElement.height = videoElement.videoHeight;
+                        resolve();
+                    };
+                });
+                
+                // Update UI
+                document.getElementById('startCameraBtn').disabled = true;
+                document.getElementById('stopCameraBtn').disabled = false;
+                
+                // Start frame capture
+                startFrameCapture();
+                
+            } catch (error) {
+                alert(`Error accessing camera: ${error.message}`);
+                console.error(error);
+            }
+        }
+        
+        function stopCamera() {
+            // Stop frame capture
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+            }
+            
+            // Stop video stream
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+                videoStream = null;
+            }
+            
+            // Update UI
+            if (videoElement) {
+                videoElement.srcObject = null;
+                videoElement.style.display = 'none';
+            }
+            
+            const streamStatus = document.getElementById('streamStatus');
+            streamStatus.textContent = 'Not streaming';
+            streamStatus.style.display = 'none';
+            
+            isStreaming = false;
+            document.getElementById('startCameraBtn').disabled = false;
+            document.getElementById('stopCameraBtn').disabled = true;
+            document.getElementById('cameraResult').innerHTML = '';
+        }
+        
+        function startFrameCapture() {
+            if (!videoElement || !canvasElement || !canvasContext || !cameraWs) {
+                return;
+            }
+            
+            // Get selected frame rate
+            const frameInterval = parseInt(document.getElementById('frameRate').value);
+            
+            // Show streaming status
+            const streamStatus = document.getElementById('streamStatus');
+            streamStatus.textContent = `Streaming at ${1000/frameInterval} fps`;
+            streamStatus.style.display = 'block';
+            
+            isStreaming = true;
+            
+            // Start interval to capture frames
+            streamInterval = setInterval(() => {
+                if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+                    // Draw video frame to canvas
+                    canvasContext.drawImage(videoElement, 0, 0);
+                    
+                    // Convert canvas to blob
+                    canvasElement.toBlob(blob => {
+                        if (blob && cameraWs && cameraWs.readyState === WebSocket.OPEN) {
+                            // Convert blob to ArrayBuffer
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                                cameraWs.send(reader.result);
+                            };
+                            reader.readAsArrayBuffer(blob);
+                        }
+                    }, 'image/jpeg', 0.7);  // 70% quality JPEG for better performance
+                }
+            }, frameInterval);
         }
 
         // Enter key handlers
