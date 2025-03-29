@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Detection Backend Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .section {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .pending {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+            background-color: #f1f1f1;
+        }
+        .message-container {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        img {
+            max-width: 100%;
+            max-height: 300px;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .flex-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        #serverUrl {
+            flex-grow: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>YOLO Detection Backend Test</h1>
+    
+    <div class="container">
+        <!-- Server URL Configuration -->
+        <div class="section">
+            <h2>Server Configuration</h2>
+            <div class="flex-row">
+                <input type="text" id="serverUrl" placeholder="Server URL (e.g., localhost:8000)" value="localhost:8000">
+                <button onclick="updateServerUrl()">Update</button>
+            </div>
+            <div id="serverUrlStatus"></div>
+        </div>
+
+        <!-- Health Check Section -->
+        <div class="section">
+            <h2>Health Check</h2>
+            <button onclick="checkHealth()">Check Server Status</button>
+            <div id="healthStatus" class="status"></div>
+        </div>
+        
+        <!-- Text WebSocket Test -->
+        <div class="section">
+            <h2>Text Message Test</h2>
+            <div>
+                <button id="textWsConnectBtn" onclick="connectTextWebSocket()">Connect Text WebSocket</button>
+                <button id="textWsDisconnectBtn" onclick="disconnectTextWebSocket()" disabled>Disconnect</button>
+            </div>
+            <div id="textWsStatus" class="status"></div>
+            <div style="margin-top: 15px;">
+                <p>Send a text message:</p>
+                <div class="flex-row">
+                    <input type="text" id="messageInput" placeholder="Type your message..." disabled>
+                    <button id="sendMessageBtn" onclick="sendTextMessage()" disabled>Send</button>
+                </div>
+                <p style="margin-top: 10px;">Send JSON message:</p>
+                <div class="flex-row">
+                    <input type="text" id="jsonMessageInput" placeholder='{"message": "Hello from client"}' disabled>
+                    <button id="sendJsonBtn" onclick="sendJsonMessage()" disabled>Send JSON</button>
+                </div>
+                <div class="message-container" id="messagesContainer">
+                    <div class="message"><strong>Messages will appear here</strong></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- HTTP Image Upload Test -->
+        <div class="section">
+            <h2>HTTP Image Detection Test</h2>
+            <p>Upload an image to test the /detect endpoint:</p>
+            <div class="flex-row" style="margin-bottom: 10px;">
+                <input type="checkbox" id="testMode" checked>
+                <label for="testMode">Test Mode (skip 6/10 frames requirement)</label>
+                <span style="margin-left: auto; font-size: 12px; color: #666;">Recommended for single image tests</span>
+            </div>
+            <input type="file" id="imageInput" accept="image/*">
+            <div>
+                <button onclick="detectImage()">Send Image</button>
+            </div>
+            <div id="previewContainer" style="display: none; margin-top: 10px;">
+                <h3>Image Preview:</h3>
+                <img id="imagePreview" src="#" alt="Preview">
+            </div>
+            <div id="httpStatus" class="status"></div>
+            <div id="httpResult"></div>
+        </div>
+        
+        <!-- WebSocket Test -->
+        <div class="section">
+            <h2>WebSocket Image Detection Test</h2>
+            <div>
+                <button id="wsConnectBtn" onclick="connectVideoWebSocket()">Connect Video WebSocket</button>
+                <button id="wsDisconnectBtn" onclick="disconnectVideoWebSocket()" disabled>Disconnect</button>
+            </div>
+            <div id="wsStatus" class="status"></div>
+            <div>
+                <p>Send an image via WebSocket:</p>
+                <input type="file" id="wsImageInput" accept="image/*" disabled>
+                <button id="wsSendBtn" onclick="sendImageViaWebSocket()" disabled>Send Image</button>
+            </div>
+            <div id="wsResult"></div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let serverUrl = 'localhost:8000';
+        let videoWs = null;
+        let textWs = null;
+
+        // Update server URL
+        function updateServerUrl() {
+            const newUrl = document.getElementById('serverUrl').value.trim();
+            if (newUrl) {
+                serverUrl = newUrl;
+                const status = document.getElementById('serverUrlStatus');
+                status.textContent = `Server URL updated to: ${serverUrl}`;
+                status.className = 'status success';
+                
+                // Disconnect WebSockets if connected
+                if (videoWs && videoWs.readyState === WebSocket.OPEN) {
+                    disconnectVideoWebSocket();
+                }
+                if (textWs && textWs.readyState === WebSocket.OPEN) {
+                    disconnectTextWebSocket();
+                }
+            }
+        }
+
+        // Health check function
+        function checkHealth() {
+            const healthStatus = document.getElementById('healthStatus');
+            healthStatus.textContent = 'Checking server status...';
+            healthStatus.className = 'status pending';
+
+            fetch(`http://${serverUrl}/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    healthStatus.textContent = `Server is online: ${data.status}`;
+                    healthStatus.className = 'status success';
+                })
+                .catch(error => {
+                    healthStatus.textContent = `Error connecting to server: ${error.message}`;
+                    healthStatus.className = 'status error';
+                });
+        }
+
+        // Text WebSocket functions
+        function connectTextWebSocket() {
+            const textWsStatus = document.getElementById('textWsStatus');
+            const connectBtn = document.getElementById('textWsConnectBtn');
+            const disconnectBtn = document.getElementById('textWsDisconnectBtn');
+            const messageInput = document.getElementById('messageInput');
+            const jsonMessageInput = document.getElementById('jsonMessageInput');
+            const sendMessageBtn = document.getElementById('sendMessageBtn');
+            const sendJsonBtn = document.getElementById('sendJsonBtn');
+
+            textWsStatus.textContent = 'Connecting to Text WebSocket...';
+            textWsStatus.className = 'status pending';
+
+            try {
+                textWs = new WebSocket(`ws://${serverUrl}/ws/text`);
+
+                textWs.onopen = function() {
+                    textWsStatus.textContent = 'Text WebSocket connected!';
+                    textWsStatus.className = 'status success';
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    messageInput.disabled = false;
+                    jsonMessageInput.disabled = false;
+                    sendMessageBtn.disabled = false;
+                    sendJsonBtn.disabled = false;
+                    
+                    // Add first message to container
+                    addMessageToContainer('System', 'Connected to server');
+                };
+
+                textWs.onmessage = function(event) {
+                    // Add message to container
+                    addMessageToContainer('Server', event.data);
+                };
+
+                textWs.onclose = function() {
+                    textWsStatus.textContent = 'Text WebSocket disconnected';
+                    textWsStatus.className = 'status pending';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    messageInput.disabled = true;
+                    jsonMessageInput.disabled = true;
+                    sendMessageBtn.disabled = true;
+                    sendJsonBtn.disabled = true;
+                    
+                    // Add disconnect message
+                    addMessageToContainer('System', 'Disconnected from server');
+                };
+
+                textWs.onerror = function(error) {
+                    textWsStatus.textContent = `Text WebSocket error: ${error.message || 'Unknown error'}`;
+                    textWsStatus.className = 'status error';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    messageInput.disabled = true;
+                    jsonMessageInput.disabled = true;
+                    sendMessageBtn.disabled = true;
+                    sendJsonBtn.disabled = true;
+                };
+            } catch (error) {
+                textWsStatus.textContent = `Error creating Text WebSocket: ${error.message}`;
+                textWsStatus.className = 'status error';
+            }
+        }
+
+        function disconnectTextWebSocket() {
+            if (textWs) {
+                textWs.close();
+                textWs = null;
+            }
+        }
+
+        function sendTextMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+            
+            if (!message) {
+                return;
+            }
+            
+            if (!textWs || textWs.readyState !== WebSocket.OPEN) {
+                addMessageToContainer('Error', 'WebSocket not connected');
+                return;
+            }
+            
+            // Send the message
+            textWs.send(message);
+            
+            // Add message to container
+            addMessageToContainer('You', message);
+            
+            // Clear input
+            messageInput.value = '';
+        }
+        
+        function sendJsonMessage() {
+            const jsonInput = document.getElementById('jsonMessageInput');
+            let message = jsonInput.value.trim();
+            
+            if (!message) {
+                return;
+            }
+            
+            if (!textWs || textWs.readyState !== WebSocket.OPEN) {
+                addMessageToContainer('Error', 'WebSocket not connected');
+                return;
+            }
+            
+            try {
+                // Try to parse as JSON to validate
+                JSON.parse(message);
+                
+                // Send the message
+                textWs.send(message);
+                
+                // Add message to container
+                addMessageToContainer('You (JSON)', message);
+                
+                // Clear input
+                jsonInput.value = '';
+            } catch (e) {
+                addMessageToContainer('Error', 'Invalid JSON: ' + e.message);
+            }
+        }
+        
+        function addMessageToContainer(sender, message) {
+            const container = document.getElementById('messagesContainer');
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message';
+            
+            // Format JSON if possible
+            let formattedMessage = message;
+            try {
+                // If it's a JSON string, parse and format it
+                if (typeof message === 'string' && 
+                    (message.startsWith('{') || message.startsWith('['))) {
+                    const jsonData = JSON.parse(message);
+                    formattedMessage = JSON.stringify(jsonData, null, 2);
+                    messageElement.innerHTML = `<strong>${sender}:</strong> <pre>${formattedMessage}</pre>`;
+                } else {
+                    messageElement.innerHTML = `<strong>${sender}:</strong> ${formattedMessage}`;
+                }
+            } catch (e) {
+                // If not valid JSON, display as is
+                messageElement.innerHTML = `<strong>${sender}:</strong> ${message}`;
+            }
+            
+            container.appendChild(messageElement);
+            
+            // Scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // HTTP image detection function
+        function detectImage() {
+            const fileInput = document.getElementById('imageInput');
+            const httpStatus = document.getElementById('httpStatus');
+            const httpResult = document.getElementById('httpResult');
+            const testMode = document.getElementById('testMode').checked;
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                httpStatus.textContent = 'Please select an image file';
+                httpStatus.className = 'status error';
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // Display image preview
+            const previewContainer = document.getElementById('previewContainer');
+            const imagePreview = document.getElementById('imagePreview');
+            imagePreview.src = URL.createObjectURL(file);
+            previewContainer.style.display = 'block';
+
+            httpStatus.textContent = `Sending image to server${testMode ? ' (test mode)' : ''}...`;
+            httpStatus.className = 'status pending';
+            httpResult.innerHTML = '';
+
+            // Create the URL with the test_mode parameter
+            const url = new URL(`http://${serverUrl}/detect`);
+            if (testMode) {
+                url.searchParams.append('test_mode', 'true');
+            }
+
+            fetch(url, {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    httpStatus.textContent = 'Detection successful!';
+                    httpStatus.className = 'status success';
+                    
+                    // Format and display results
+                    httpResult.innerHTML = '<h3>Detection Results:</h3>';
+                    
+                    // Show detected objects
+                    if (data.detected_objects && data.detected_objects.length > 0) {
+                        httpResult.innerHTML += '<h4>Detected Objects:</h4>';
+                        httpResult.innerHTML += '<ul>';
+                        data.detected_objects.forEach(obj => {
+                            httpResult.innerHTML += `<li>${obj.class} (${obj.confidence * 100}%)</li>`;
+                        });
+                        httpResult.innerHTML += '</ul>';
+                    } else {
+                        httpResult.innerHTML += '<p>No objects detected with confidence > 50%</p>';
+                    }
+                    
+                    // Full JSON results
+                    httpResult.innerHTML += '<h4>Full Results:</h4>';
+                    httpResult.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    
+                    // Highlight activity detections
+                    httpResult.innerHTML += '<h4>Activity Detection:</h4>';
+                    if (data.test_mode) {
+                        httpResult.innerHTML += '<p><em>Test mode: immediate detection, no history requirement</em></p>';
+                    }
+                    
+                    if (data.planting_detected) {
+                        httpResult.innerHTML += '<div class="status success">Planting activity detected! ✅</div>';
+                    }
+                    if (data.watering_detected) {
+                        httpResult.innerHTML += '<div class="status success">Watering activity detected! ✅</div>';
+                    }
+                    if (data.waste_separation_detected) {
+                        httpResult.innerHTML += '<div class="status success">Waste separation activity detected! ✅</div>';
+                    }
+                    if (!data.planting_detected && !data.watering_detected && !data.waste_separation_detected) {
+                        httpResult.innerHTML += '<div class="status error">No eco-activities detected</div>';
+                    }
+                })
+                .catch(error => {
+                    httpStatus.textContent = `Error: ${error.message}`;
+                    httpStatus.className = 'status error';
+                });
+        }
+
+        // Video WebSocket functions
+        function connectVideoWebSocket() {
+            const wsStatus = document.getElementById('wsStatus');
+            const connectBtn = document.getElementById('wsConnectBtn');
+            const disconnectBtn = document.getElementById('wsDisconnectBtn');
+            const wsImageInput = document.getElementById('wsImageInput');
+            const wsSendBtn = document.getElementById('wsSendBtn');
+
+            wsStatus.textContent = 'Connecting to Video WebSocket...';
+            wsStatus.className = 'status pending';
+
+            try {
+                videoWs = new WebSocket(`ws://${serverUrl}/ws/video`);
+
+                videoWs.onopen = function() {
+                    wsStatus.textContent = 'Video WebSocket connected!';
+                    wsStatus.className = 'status success';
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                    wsImageInput.disabled = false;
+                    wsSendBtn.disabled = false;
+                };
+
+                videoWs.onmessage = function(event) {
+                    const wsResult = document.getElementById('wsResult');
+                    try {
+                        const data = JSON.parse(event.data);
+                        wsResult.innerHTML = '<h3>WebSocket Result:</h3>';
+                        wsResult.innerHTML += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                        
+                        // Highlight detections
+                        if (data.planting_detected) {
+                            wsResult.innerHTML += '<div class="status success">Planting activity detected! ✅</div>';
+                        }
+                        if (data.watering_detected) {
+                            wsResult.innerHTML += '<div class="status success">Watering activity detected! ✅</div>';
+                        }
+                        if (data.waste_separation_detected) {
+                            wsResult.innerHTML += '<div class="status success">Waste separation activity detected! ✅</div>';
+                        }
+                        if (!data.planting_detected && !data.watering_detected && !data.waste_separation_detected) {
+                            wsResult.innerHTML += '<div class="status error">No eco-activities detected</div>';
+                        }
+                    } catch (e) {
+                        wsResult.innerHTML = `<div class="status error">Error parsing WebSocket data: ${e.message}</div>`;
+                        wsResult.innerHTML += `<pre>${event.data}</pre>`;
+                    }
+                };
+
+                videoWs.onclose = function() {
+                    wsStatus.textContent = 'Video WebSocket disconnected';
+                    wsStatus.className = 'status pending';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    wsImageInput.disabled = true;
+                    wsSendBtn.disabled = true;
+                };
+
+                videoWs.onerror = function(error) {
+                    wsStatus.textContent = `Video WebSocket error: ${error.message || 'Unknown error'}`;
+                    wsStatus.className = 'status error';
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    wsImageInput.disabled = true;
+                    wsSendBtn.disabled = true;
+                };
+            } catch (error) {
+                wsStatus.textContent = `Error creating Video WebSocket: ${error.message}`;
+                wsStatus.className = 'status error';
+            }
+        }
+
+        function disconnectVideoWebSocket() {
+            if (videoWs) {
+                videoWs.close();
+                videoWs = null;
+            }
+        }
+
+        function sendImageViaWebSocket() {
+            const fileInput = document.getElementById('wsImageInput');
+            const wsStatus = document.getElementById('wsStatus');
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                wsStatus.textContent = 'Please select an image file';
+                wsStatus.className = 'status error';
+                return;
+            }
+
+            if (!videoWs || videoWs.readyState !== WebSocket.OPEN) {
+                wsStatus.textContent = 'WebSocket not connected';
+                wsStatus.className = 'status error';
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            
+            reader.onload = function() {
+                try {
+                    const arrayBuffer = this.result;
+                    videoWs.send(arrayBuffer);
+                    wsStatus.textContent = 'Image sent via WebSocket';
+                    wsStatus.className = 'status success';
+                } catch (error) {
+                    wsStatus.textContent = `Error sending image: ${error.message}`;
+                    wsStatus.className = 'status error';
+                }
+            };
+            
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Enter key handlers
+        document.getElementById('messageInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                sendTextMessage();
+            }
+        });
+        
+        document.getElementById('jsonMessageInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                sendJsonMessage();
+            }
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('serverUrl').value = serverUrl;
+            document.getElementById('jsonMessageInput').value = '{"message": "Hello from client"}';
+        });
+    </script>
+</body>
+</html> 
