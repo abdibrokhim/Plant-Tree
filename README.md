@@ -1,4 +1,6 @@
-# Green Guardians: Eco-Action Rewards
+# .env (a.k.a. take trash)
+
+> Join Waitlist Now: https://www.yaps.gg/lab/take-trash
 
 An app to gamify eco-friendly activities, incorporating user verification and community engagement. Key features include challenges related to planting, watering, and waste separation, a points system, and community leaderboards.
 
