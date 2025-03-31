@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:http/http.dart' as http;
 
@@ -15,7 +14,7 @@ class ScanScreen extends StatefulWidget {
   State<ScanScreen> createState() => _ScanScreenState();
 }
 
-class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
+class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
   String _selectedActivity = 'Plant a Tree';
   final List<String> _activities = [
     'Plant a Tree',
@@ -49,24 +48,66 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   String _serverUrl = Platform.isAndroid ? '10.0.2.2:8000' : 'localhost:8000';
   final TextEditingController _serverUrlController = TextEditingController();
   bool _showServerConfig = false;
+  
+  // Simulation mode variables
+  bool _isSimulationMode = true; // Set to true for simulation
+  bool _isSimulating = false;
+  Timer? _simulationTimer;
+  String _simulationStatus = "";
+  bool _detectionComplete = false;
+  
+  // Animation controllers for simulation effects
+  late AnimationController _scanLineController;
+  late Animation<double> _scanLineAnimation;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _serverUrlController.text = _serverUrl;
-    _initializeCamera();
+    
+    // Setup animation controllers for simulation
+    _scanLineController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat(reverse: true);
+    
+    _scanLineAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_scanLineController);
+    
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    )..repeat(reverse: true);
+    
+    _pulseAnimation = Tween<double>(begin: 0.4, end: 1.0)
+      .chain(CurveTween(curve: Curves.easeInOut))
+      .animate(_pulseController);
   }
   
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _stopVideoProcessing();
-    _disconnectTextWebSocket();
+    // Cancel timers and animations first
+    _simulationTimer?.cancel();
+    _frameTimer?.cancel();
+    _scanLineController.dispose();
+    _pulseController.dispose();
+    
+    // Dispose other controllers
     _cameraController?.dispose();
     _serverUrlController.dispose();
     _messageController.dispose();
     _messagesScrollController.dispose();
+    
+    // Close connections
+    if (_channel != null) {
+      _channel!.sink.close();
+      _channel = null;
+    }
+    _disconnectTextWebSocket();
+    
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
   
@@ -80,6 +121,7 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.inactive) {
       _stopVideoProcessing();
       _cameraController?.dispose();
+      _isCameraInitialized = false;
     } else if (state == AppLifecycleState.resumed) {
       _initializeCamera();
     }
@@ -124,9 +166,90 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
       );
     }
   }
+  
+  // Simulation functions
+  void _startSimulation() async {
+    if (_isSimulating) return;
+    
+    // Initialize camera if not already initialized
+    if (!_isCameraInitialized) {
+      await _initializeCamera();
+      // If camera initialization failed, show an error and return
+      if (!_isCameraInitialized) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to initialize camera')),
+        );
+        return;
+      }
+    }
+    
+    setState(() {
+      _isSimulating = true;
+      _isProcessing = true;
+      _detectionComplete = false;
+      _simulationStatus = "";
+      _detectionResults = "No detections yet";
+    });
+    
+    // Schedule detection events
+    _simulationTimer = Timer(const Duration(seconds: 3), () {
+      setState(() {
+        _simulationStatus = "Analyzing...";
+      });
+      
+      _simulationTimer = Timer(const Duration(seconds: 2), () {
+        setState(() {
+          _detectionComplete = true;
+          
+          // Set detection results based on selected activity
+          if (_selectedActivity == 'Water Plants') {
+            _simulationStatus = "Watering activity detected! ✅";
+            _detectionResults = '{"planting_detected": false, "watering_detected": true, "waste_separation_detected": false, "detected_objects": [{"class": "watering can", "confidence": 0.92}, {"class": "plant", "confidence": 0.87}]}';
+          } else if (_selectedActivity == 'Plant a Tree') {
+            _simulationStatus = "Planting activity detected! ✅";
+            _detectionResults = '{"planting_detected": true, "watering_detected": false, "waste_separation_detected": false, "detected_objects": [{"class": "seedling", "confidence": 0.88}, {"class": "soil", "confidence": 0.91}]}';
+          } else if (_selectedActivity == 'Recycle Waste') {
+            _simulationStatus = "Waste separation activity detected! ✅";
+            _detectionResults = '{"planting_detected": false, "watering_detected": false, "waste_separation_detected": true, "detected_objects": [{"class": "plastic bottle", "confidence": 0.94}, {"class": "recycle bin", "confidence": 0.89}]}';
+          }
+        });
+        
+        // Auto-stop simulation after a delay
+        _simulationTimer = Timer(const Duration(seconds: 4), () {
+          _stopSimulation();
+        });
+      });
+    });
+  }
+  
+  void _stopSimulation() {
+    _simulationTimer?.cancel();
+    _simulationTimer = null;
+    
+    if (mounted) {
+      setState(() {
+        _isSimulating = false;
+        _isProcessing = false;
+      });
+    }
+    
+    // Release camera resources when simulation is done
+    if (_isSimulationMode && _isCameraInitialized) {
+      _cameraController?.dispose();
+      setState(() {
+        _isCameraInitialized = false;
+      });
+    }
+  }
 
   // Start video processing using WebSocket
   void _startVideoProcessing() {
+    // For simulation mode, just start simulation instead
+    if (_isSimulationMode) {
+      _startSimulation();
+      return;
+    }
+    
     if (_cameraController == null || !_cameraController!.value.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Camera not initialized')),
@@ -223,6 +346,12 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   
   // Stop video processing and clean up resources
   void _stopVideoProcessing() {
+    // For simulation mode, stop simulation instead
+    if (_isSimulationMode) {
+      _stopSimulation();
+      return;
+    }
+    
     _frameTimer?.cancel();
     _frameTimer = null;
     
@@ -270,6 +399,12 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
   
   // Alternative method to send a single image via HTTP
   Future<void> _captureAndSendSingleImage() async {
+    // For simulation mode, just start simulation instead
+    if (_isSimulationMode) {
+      _startSimulation();
+      return;
+    }
+    
     if (_cameraController == null || !_cameraController!.value.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Camera not initialized')),
@@ -784,11 +919,15 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 24),
           
-          // Camera preview or placeholder
+          // Camera preview or simulation
           Expanded(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: _isCameraInitialized
+              child: _isSimulationMode 
+                ? (_isCameraInitialized && _isSimulating
+                  ? _buildSimulationWithCameraView()
+                  : _buildInitialSimulationView())
+                : (_isCameraInitialized
                   ? Stack(
                       children: [
                         // Camera preview
@@ -854,21 +993,23 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
                           ),
                         ],
                       ),
-                    ),
+                    )),
             ),
           ),
           const SizedBox(height: 24),
           
-          // Capture button
+          // Capture button - updated for simulation mode
           ElevatedButton.icon(
-            onPressed: _isCameraInitialized 
-                ? (_isProcessing ? _stopVideoProcessing : _captureAndSendSingleImage) 
-                : () => _initializeCamera(),
+            onPressed: _isSimulationMode 
+                ? (_isProcessing ? _stopSimulation : _startSimulation)
+                : (_isCameraInitialized 
+                    ? (_isProcessing ? _stopVideoProcessing : _captureAndSendSingleImage) 
+                    : () => _initializeCamera()),
             icon: Icon(_isProcessing ? Icons.stop : Icons.camera),
             label: Text(
               _isProcessing 
                   ? 'STOP SCANNING' 
-                  : (_isCameraInitialized ? 'CAPTURE ACTIVITY' : 'INITIALIZE CAMERA')
+                  : (_isSimulationMode ? 'START SCANNING' : (_isCameraInitialized ? 'CAPTURE ACTIVITY' : 'INITIALIZE CAMERA'))
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: _isProcessing ? Colors.red : Colors.green,
@@ -881,8 +1022,8 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
             ),
           ),
           
-          // Add a button for continuous mode
-          if (_isCameraInitialized && !_isProcessing)
+          // Add a button for continuous mode - updated for simulation mode
+          if ((_isSimulationMode || _isCameraInitialized) && !_isProcessing)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: OutlinedButton.icon(
@@ -905,6 +1046,243 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
     );
   }
   
+  // Build the simulation view with camera
+  Widget _buildSimulationWithCameraView() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Camera background
+        CameraPreview(_cameraController!),
+        
+        // Scanning overlay when processing
+        if (_isProcessing)
+          Stack(
+            children: [
+              // Semi-transparent overlay
+              Container(
+                color: Colors.black.withOpacity(0.3),
+              ),
+              
+              // Scan line animation
+              AnimatedBuilder(
+                animation: _scanLineAnimation,
+                builder: (context, child) {
+                  return Positioned(
+                    top: MediaQuery.of(context).size.height * _scanLineAnimation.value * 0.3,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      height: 2,
+                      color: Colors.green.withOpacity(0.8),
+                    ),
+                  );
+                },
+              ),
+              
+              // Grid lines
+              CustomPaint(
+                size: Size.infinite,
+                painter: _GridPainter(),
+              ),
+              
+              // Corner brackets
+              Positioned(
+                top: 20,
+                left: 20,
+                child: _buildCornerBracket(topLeft: true),
+              ),
+              Positioned(
+                top: 20,
+                right: 20,
+                child: _buildCornerBracket(topRight: true),
+              ),
+              Positioned(
+                bottom: 20,
+                left: 20,
+                child: _buildCornerBracket(bottomLeft: true),
+              ),
+              Positioned(
+                bottom: 20,
+                right: 20,
+                child: _buildCornerBracket(bottomRight: true),
+              ),
+              
+              // Status text
+              if (_simulationStatus.isNotEmpty)
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Colors.black.withOpacity(0.6),
+                    child: Text(
+                      _simulationStatus,
+                      style: TextStyle(
+                        color: _detectionComplete ? Colors.green : Colors.white,
+                        fontSize: 16,
+                        fontWeight: _detectionComplete ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+                
+              // Pulsing border when detection complete
+              if (_detectionComplete)
+                AnimatedBuilder(
+                  animation: _pulseAnimation,
+                  builder: (context, child) {
+                    return Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: Colors.green.withOpacity(_pulseAnimation.value),
+                          width: 5,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    );
+                  },
+                ),
+                
+              // Activity indicators based on selected activity
+              if (_detectionComplete)
+                ..._buildActivityIndicators(),
+            ],
+          ),
+      ],
+    );
+  }
+  
+  // Initial simulation view (before camera is started)
+  Widget _buildInitialSimulationView() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.camera_alt,
+            size: 64,
+            color: Colors.green.shade200,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Eco-Activity Scanner',
+            style: TextStyle(
+              color: Colors.green.shade200,
+              fontSize: 18,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Press START SCANNING to begin',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  // Build appropriate activity indicators based on selected activity
+  List<Widget> _buildActivityIndicators() {
+    if (_selectedActivity == 'Water Plants') {
+      return [
+        Positioned(
+          top: MediaQuery.of(context).size.height * 0.15,
+          left: MediaQuery.of(context).size.width * 0.1,
+          child: _buildActivityIndicator(Icons.water_drop, Colors.blue),
+        ),
+        Positioned(
+          top: MediaQuery.of(context).size.height * 0.1,
+          right: MediaQuery.of(context).size.width * 0.15,
+          child: _buildActivityIndicator(Icons.water_drop, Colors.blue),
+        ),
+      ];
+    } else if (_selectedActivity == 'Plant a Tree') {
+      return [
+        Positioned(
+          top: MediaQuery.of(context).size.height * 0.12,
+          left: MediaQuery.of(context).size.width * 0.15,
+          child: _buildActivityIndicator(Icons.nature, Colors.green),
+        ),
+        Positioned(
+          bottom: MediaQuery.of(context).size.height * 0.2,
+          right: MediaQuery.of(context).size.width * 0.1,
+          child: _buildActivityIndicator(Icons.eco, Colors.green.shade300),
+        ),
+      ];
+    } else if (_selectedActivity == 'Recycle Waste') {
+      return [
+        Positioned(
+          top: MediaQuery.of(context).size.height * 0.1,
+          left: MediaQuery.of(context).size.width * 0.2,
+          child: _buildActivityIndicator(Icons.recycling, Colors.lightBlue),
+        ),
+        Positioned(
+          bottom: MediaQuery.of(context).size.height * 0.15,
+          right: MediaQuery.of(context).size.width * 0.2,
+          child: _buildActivityIndicator(Icons.delete_outline, Colors.blueGrey),
+        ),
+      ];
+    }
+    return [];
+  }
+  
+  Widget _buildActivityIndicator(IconData icon, Color color) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(seconds: 1),
+      curve: Curves.elasticOut,
+      builder: (context, value, child) {
+        return Transform.scale(
+          scale: value,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.3),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: color,
+              size: 32,
+            ),
+          ),
+        );
+      },
+    );
+  }
+  
+  Widget _buildCornerBracket({
+    bool topLeft = false,
+    bool topRight = false,
+    bool bottomLeft = false,
+    bool bottomRight = false,
+  }) {
+    return SizedBox(
+      width: 30,
+      height: 30,
+      child: CustomPaint(
+        painter: _CornerBracketPainter(
+          topLeft: topLeft,
+          topRight: topRight,
+          bottomLeft: bottomLeft, 
+          bottomRight: bottomRight,
+          color: Colors.green,
+          thickness: 3,
+        ),
+      ),
+    );
+  }
+  
   Color _getSenderColor(String sender) {
     switch (sender) {
       case 'You':
@@ -920,4 +1298,113 @@ class _ScanScreenState extends State<ScanScreen> with WidgetsBindingObserver {
         return Colors.black;
     }
   }
+}
+
+// Grid painter for simulation effect
+class _GridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.green.withOpacity(0.2)
+      ..strokeWidth = 1;
+    
+    // Horizontal lines
+    for (var i = 0; i <= 10; i++) {
+      final y = size.height * i / 10;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+    
+    // Vertical lines
+    for (var i = 0; i <= 10; i++) {
+      final x = size.width * i / 10;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+  }
+  
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// Corner bracket painter for simulation effect
+class _CornerBracketPainter extends CustomPainter {
+  final bool topLeft;
+  final bool topRight;
+  final bool bottomLeft;
+  final bool bottomRight;
+  final Color color;
+  final double thickness;
+  
+  _CornerBracketPainter({
+    this.topLeft = false,
+    this.topRight = false,
+    this.bottomLeft = false,
+    this.bottomRight = false,
+    this.color = Colors.green,
+    this.thickness = 2,
+  });
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = thickness
+      ..strokeCap = StrokeCap.square;
+    
+    final length = size.width * 0.8;
+    
+    if (topLeft) {
+      canvas.drawLine(
+        Offset(0, thickness / 2),
+        Offset(length, thickness / 2),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(thickness / 2, 0),
+        Offset(thickness / 2, length),
+        paint,
+      );
+    }
+    
+    if (topRight) {
+      canvas.drawLine(
+        Offset(size.width, thickness / 2),
+        Offset(size.width - length, thickness / 2),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(size.width - thickness / 2, 0),
+        Offset(size.width - thickness / 2, length),
+        paint,
+      );
+    }
+    
+    if (bottomLeft) {
+      canvas.drawLine(
+        Offset(0, size.height - thickness / 2),
+        Offset(length, size.height - thickness / 2),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(thickness / 2, size.height),
+        Offset(thickness / 2, size.height - length),
+        paint,
+      );
+    }
+    
+    if (bottomRight) {
+      canvas.drawLine(
+        Offset(size.width, size.height - thickness / 2),
+        Offset(size.width - length, size.height - thickness / 2),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(size.width - thickness / 2, size.height),
+        Offset(size.width - thickness / 2, size.height - length),
+        paint,
+      );
+    }
+  }
+  
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

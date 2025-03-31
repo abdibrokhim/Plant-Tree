@@ -305,7 +305,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ),
                       ),
                       const SizedBox(height: 16),
-                      ..._usageData.take(5).map((app) => _buildAppUsageRow(app)).toList(),
+                      ..._usageData.take(5).map((app) => _buildAppUsageRow(app)),
                     ],
                   ),
                 ),

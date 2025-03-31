@@ -75,6 +75,8 @@ flutter:
   
   assets:
     - assets/models/
+    - assets/videos/
+    - assets/take_trash.mp4
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
